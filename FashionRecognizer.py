@@ -43,7 +43,7 @@ learning_rate = 0.001
 
 height, width, channels = 28, 28, 1
 n_epochs = 30
-batch_Size = 64
+batch_size = 64
 batch_count = 0
 
 save_iterations = 1
@@ -119,12 +119,12 @@ def createDataset(X, y, use_batch=True):
 
     dataset = tf.data.Dataset.zip((X_dataset, y_dataset))
     if use_batch:
-        dataset = dataset.shuffle(buffer_size=len(X)).batch(batch_Size)
+        dataset = dataset.shuffle(buffer_size=size).batch(batch_size)
     else:
-        dataset = dataset.shuffle(buffer_size=len(X))
+        dataset = dataset.shuffle(buffer_size=size).batch(size)
 
     if batch_count == 0:
-        batch_count = math.ceil(size/batch_Size)
+        batch_count = math.ceil(size/batch_size)
     print('Created dataset: {}'.format(dataset))
     return dataset
 
@@ -146,7 +146,7 @@ def restoreModel(checkpoint, ckptManager):
 
 def saveCheckpoint(ckptManager):
     save_path = ckptManager.save()
-    print("Saved a checkpoint at {}".format(save_path))
+    print("Saved a checkpoint at {}\n".format(save_path))
 
 #%%
 #############################
@@ -182,8 +182,8 @@ def trainNetwork(model, training_data, validation_data):
 
     train_loss = tf.keras.metrics.Mean(name='train_loss')
     train_accuracy = tf.keras.metrics.CategoricalAccuracy(name='train_accuracy')
-    val_loss = tf.keras.metrics.Mean(name='validation_loss')
-    val_accuracy = tf.keras.metrics.CategoricalAccuracy(name='validation_accuracy')
+    validation_loss = tf.keras.metrics.Mean(name='validation_loss')
+    validation_accuracy = tf.keras.metrics.CategoricalAccuracy(name='validation_accuracy')
 
     # Create a Checkpoint and a CheckpointManager
     checkpoint, ckptManager = createCheckpoint(model, optimizer)
@@ -203,7 +203,10 @@ def trainNetwork(model, training_data, validation_data):
             print("Epoch {}, Batch {}/{}, Train loss {}, Train accuracy {}".format(
                 epoch+1, n_batch, batch_count, train_loss.result(), train_accuracy.result()), end='\r')
 
-        print('\nTime for epoch {} is {} sec\n'.format(epoch+1, time.time()-startTime))
+        for validation_image, validation_label in validation_data:
+            validationStep(validation_image, validation_label, model, loss_op, validation_loss, validation_accuracy)
+
+        print('\nValidation loss {}, Validation accuracy {} \nTime for epoch {} is {} sec'.format(validation_loss.result(), validation_accuracy.result(), epoch+1, time.time()-startTime))
         if epoch+1 % save_iterations == 0:
             saveCheckpoint(ckptManager)
                 
