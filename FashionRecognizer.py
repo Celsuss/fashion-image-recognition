@@ -149,6 +149,18 @@ def saveCheckpoint(ckptManager):
     print("Saved a checkpoint at {}\n".format(save_path))
 
 #%%
+##############################
+# Loss functions and metrics #
+##############################
+def getLossOp():
+    return tf.keras.losses.CategoricalCrossentropy(from_logits=True) 
+
+def getLossAndAccuracyMetrics(name):
+    train_loss = tf.keras.metrics.Mean(name=name+'_loss')
+    train_accuracy = tf.keras.metrics.CategoricalAccuracy(name=name+'_accuracy')
+    return train_loss, train_accuracy
+
+#%%
 #############################
 # Create the neural network #
 #############################
@@ -177,13 +189,11 @@ def createNetwork(n_inputs, n_outputs):
 
 def trainNetwork(model, training_data, validation_data):
     global batch_count
-    loss_op = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
     optimizer = tf.keras.optimizers.Adam(lr=learning_rate)
 
-    train_loss = tf.keras.metrics.Mean(name='train_loss')
-    train_accuracy = tf.keras.metrics.CategoricalAccuracy(name='train_accuracy')
-    validation_loss = tf.keras.metrics.Mean(name='validation_loss')
-    validation_accuracy = tf.keras.metrics.CategoricalAccuracy(name='validation_accuracy')
+    loss_op = getLossOp()
+    train_loss, train_accuracy = getLossAndAccuracyMetrics('train')
+    validation_loss, validation_accuracy = getLossAndAccuracyMetrics('validation')
 
     # Create a Checkpoint and a CheckpointManager
     checkpoint, ckptManager = createCheckpoint(model, optimizer)
@@ -191,7 +201,7 @@ def trainNetwork(model, training_data, validation_data):
     restoreModel(checkpoint, ckptManager)
 
     print('**** Start training ****')
-    
+
     for epoch in range(n_epochs):
         startTime = time.time()
 
@@ -204,11 +214,15 @@ def trainNetwork(model, training_data, validation_data):
                 epoch+1, n_batch, batch_count, train_loss.result(), train_accuracy.result()), end='\r')
 
         for validation_image, validation_label in validation_data:
-            validationStep(validation_image, validation_label, model, loss_op, validation_loss, validation_accuracy)
+            testStep(validation_image, validation_label, model, loss_op, validation_loss, validation_accuracy)
 
         print('\nValidation loss {}, Validation accuracy {} \nTime for epoch {} is {} sec'.format(validation_loss.result(), validation_accuracy.result(), epoch+1, time.time()-startTime))
+        test = epoch+1 % save_iterations
+        print('test {}'.format(test))
         if epoch+1 % save_iterations == 0:
             saveCheckpoint(ckptManager)
+
+    return model
                 
 
 # Notice the use of `tf.function`
@@ -227,11 +241,24 @@ def trainStep(images, labels, model, optimizer, loss_op, train_loss, train_accur
     return loss
 
 @tf.function
-def validationStep(images, labels, model, loss_op, validation_loss, validation_accuracy):
+def testStep(images, labels, model, loss_op, test_loss, test_accuracy):
     predictions = model(images)
     loss = loss_op(predictions, labels)
-    validation_loss(loss)
-    validation_accuracy(labels, predictions)
+    test_loss(loss)
+    test_accuracy(labels, predictions)
+
+#%%
+####################
+# Test the network #
+####################
+def testNetwork(model, test_data):
+    optimizer = tf.keras.optimizers.Adam(lr=learning_rate)
+    loss_op = getLossOp()
+    test_loss, test_accuracy = getLossAndAccuracyMetrics('test')
+
+    for test_image, test_label in test_data:
+        testStep(test_image, test_label, model, loss_op, test_loss, test_accuracy)
+    print('Test loss {}, Test accuracy {}'.format(test_loss.result(), test_accuracy.result()))
 
 #%%
 if __name__ == '__main__':
@@ -252,11 +279,13 @@ if __name__ == '__main__':
 
     training_dataset = createDataset(X_train, y_train)
     validation_dataset = createDataset(X_val, y_val, use_batch=False)
+    test_dataset = createDataset(X_test, y_test, use_batch=False)
 
     model = createNetwork(input_shape, n_output)
     model.summary()
 
-    trainNetwork(model, training_dataset, validation_dataset)
+    model = trainNetwork(model, training_dataset, validation_dataset)
+    testNetwork(model, test_dataset)
 
     
 #%%
