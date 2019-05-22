@@ -22,12 +22,15 @@ import tensorflow as tf
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
+import logging
 import math
 import time
 import sys
+import os
 
 print(tf.__version__)
-
+logging.disable(logging.WARNING)
+os.environ["TF_CPP_MIN_LOG_LEVEL"]="2"
 AUTOTUNE = tf.data.experimental.AUTOTUNE
 
 #%%
@@ -43,6 +46,7 @@ n_epochs = 30
 batch_Size = 64
 batch_count = 0
 
+save_iterations = 1
 checkpoint_path = './tmp'
 
 #%%
@@ -54,7 +58,6 @@ def drawImage(data):
         image = data.reshape(width, height) 
         plt.imshow(image, cmap=plt.cm.binary)
         plt.show()
-
 
 #%%
 ############################
@@ -69,7 +72,6 @@ def loadData(path):
     
     print('X_data_train:\n {}'.format(X_data_train.describe()))
     print(X_data_train.head())
-    # print(y_data_train.describe())
     
     X_train = np.array(X_data_train)
     y_train = np.array(y_data_train)
@@ -96,13 +98,17 @@ def makeOneHot(labels):
     labels = tf.one_hot(labels, labels.max()+1)
     return labels
 
-# TODO: Implment preprocessing
+def reshapeAndMakeOneHot(data, labels):
+    data = reshapeTrainingData(data)
+    labels = makeOneHot(labels)
+    return data, labels
+
 def preprocessData(image_raw):
     image = tf.cast(image_raw, tf.float32)
     image = image / 255.0
     return image
 
-def createDataset(X, y):
+def createDataset(X, y, use_batch=True):
     global batch_count
     size = len(X)
 
@@ -112,7 +118,11 @@ def createDataset(X, y):
     X_dataset = X_dataset.map(preprocessData, num_parallel_calls=AUTOTUNE)
 
     dataset = tf.data.Dataset.zip((X_dataset, y_dataset))
-    dataset = dataset.shuffle(buffer_size=len(X)).batch(batch_Size)
+    if use_batch:
+        dataset = dataset.shuffle(buffer_size=len(X)).batch(batch_Size)
+    else:
+        dataset = dataset.shuffle(buffer_size=len(X))
+
     if batch_count == 0:
         batch_count = math.ceil(size/batch_Size)
     print('Created dataset: {}'.format(dataset))
@@ -130,9 +140,13 @@ def createCheckpoint(model, optimizer):
 def restoreModel(checkpoint, ckptManager):
     checkpoint.restore(ckptManager.latest_checkpoint)
     if ckptManager.latest_checkpoint:
-        print('Restored checkpoint from {} at epoch {}'.format(ckptManager.latest_checkpoint, start_epoch))
+        print('Restored checkpoint from {}'.format(ckptManager.latest_checkpoint))
     else:
         print('No checkpoints found, start training at epoch 0')
+
+def saveCheckpoint(ckptManager):
+    save_path = ckptManager.save()
+    print("Saved a checkpoint at {}".format(save_path))
 
 #%%
 #############################
@@ -163,7 +177,6 @@ def createNetwork(n_inputs, n_outputs):
 
 def trainNetwork(model, training_data, validation_data):
     global batch_count
-    # loss_op = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
     loss_op = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
     optimizer = tf.keras.optimizers.Adam(lr=learning_rate)
 
@@ -188,11 +201,11 @@ def trainNetwork(model, training_data, validation_data):
             loss = trainStep(image_batch, label_batch, model, optimizer, loss_op, train_loss, train_accuracy)
 
             print("Epoch {}, Batch {}/{}, Train loss {}, Train accuracy {}".format(
-                epoch+1, n_batch, batch_count, train_loss.result(), train_accuracy.result()*100), end='\r')
+                epoch+1, n_batch, batch_count, train_loss.result(), train_accuracy.result()), end='\r')
 
-        # saveCheckpointAndImage(ckptManager, generator, seed, epoch)
-        print('')
-        print('Time for epoch {} is {} sec\n'.format(epoch+1, time.time()-startTime))
+        print('\nTime for epoch {} is {} sec\n'.format(epoch+1, time.time()-startTime))
+        if epoch+1 % save_iterations == 0:
+            saveCheckpoint(ckptManager)
                 
 
 # Notice the use of `tf.function`
@@ -225,13 +238,9 @@ if __name__ == '__main__':
 
     print("** Fashion Recognizer **")
     X_train, y_train, X_val, y_val, X_test, y_test = loadData('Data/')
-    y_train = makeOneHot(y_train)
-    y_val = makeOneHot(y_val)
-    y_test = makeOneHot(y_test)
-
-    X_train = reshapeTrainingData(X_train)
-    X_val = reshapeTrainingData(X_val)
-    X_test = reshapeTrainingData(X_test)
+    X_train, y_train = reshapeAndMakeOneHot(X_train, y_train)
+    X_val, y_val = reshapeAndMakeOneHot(X_val, y_val)
+    X_test, y_test = reshapeAndMakeOneHot(X_test, y_test)
 
     drawImage(X_train[10])
 
@@ -239,7 +248,7 @@ if __name__ == '__main__':
     n_output = y_train.shape[-1]        # 10
 
     training_dataset = createDataset(X_train, y_train)
-    validation_dataset = createDataset(X_val, y_val)
+    validation_dataset = createDataset(X_val, y_val, use_batch=False)
 
     model = createNetwork(input_shape, n_output)
     model.summary()
