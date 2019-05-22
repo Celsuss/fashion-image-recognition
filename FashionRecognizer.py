@@ -22,6 +22,7 @@ import tensorflow as tf
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
+import math
 import time
 import sys
 
@@ -40,6 +41,7 @@ learning_rate = 0.001
 height, width, channels = 28, 28, 1
 n_epochs = 30
 batch_Size = 64
+batch_count = 0
 
 checkpoint_path = './tmp'
 
@@ -86,13 +88,22 @@ def loadData(path):
     print('Validation samples: {}, Test samples: {}'.format(X_val.shape[0], X_test.shape[0]))
     return X_train, y_train, X_val, y_val, X_test, y_test
 
+def reshapeTrainingData(data):
+    data = data.reshape(data.shape[0], height, width, channels)
+    return data
+
+def makeOneHot(labels):
+    labels = tf.one_hot(labels, labels.max()+1)
+    return labels
+
 # TODO: Implment preprocessing
 def preprocessData(image_raw):
     image = tf.cast(image_raw, tf.float32)
-    # image = image / 255.0
+    image = image / 255.0
     return image
 
 def createDataset(X, y):
+    global batch_count
     size = len(X)
 
     X_dataset = tf.data.Dataset.from_tensor_slices(X)
@@ -101,7 +112,9 @@ def createDataset(X, y):
     X_dataset = X_dataset.map(preprocessData, num_parallel_calls=AUTOTUNE)
 
     dataset = tf.data.Dataset.zip((X_dataset, y_dataset))
-    dataset = dataset.shuffle(buffer_size=len(X)).batch(batch_Size) #.repeat()
+    dataset = dataset.shuffle(buffer_size=len(X)).batch(batch_Size)
+    if batch_count == 0:
+        batch_count = math.ceil(size/batch_Size)
     print('Created dataset: {}'.format(dataset))
     return dataset
 
@@ -148,16 +161,16 @@ def createNetwork(n_inputs, n_outputs):
 
     return model
 
-train_loss = tf.keras.metrics.Mean(name='train_loss')
-train_accuracy = tf.keras.metrics.CategoricalAccuracy(name='train_accuracy')
-
-val_loss = tf.keras.metrics.Mean(name='validation_loss')
-val_accuracy = tf.keras.metrics.CategoricalAccuracy(name='validation_accuracy')
-
 def trainNetwork(model, training_data, validation_data):
+    global batch_count
     # loss_op = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
     loss_op = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
     optimizer = tf.keras.optimizers.Adam(lr=learning_rate)
+
+    train_loss = tf.keras.metrics.Mean(name='train_loss')
+    train_accuracy = tf.keras.metrics.CategoricalAccuracy(name='train_accuracy')
+    val_loss = tf.keras.metrics.Mean(name='validation_loss')
+    val_accuracy = tf.keras.metrics.CategoricalAccuracy(name='validation_accuracy')
 
     # Create a Checkpoint and a CheckpointManager
     checkpoint, ckptManager = createCheckpoint(model, optimizer)
@@ -169,11 +182,13 @@ def trainNetwork(model, training_data, validation_data):
     for epoch in range(n_epochs):
         startTime = time.time()
 
-        batch_count = 0
+        n_batch = 0
         for image_batch, label_batch in training_data:
-            batch_count += 1
+            n_batch += 1
             loss = trainStep(image_batch, label_batch, model, optimizer, loss_op, train_loss, train_accuracy)
-            print("Epoch {}, Batch {}, Train loss {}, Train accuracy {}".format(epoch+1, batch_count, train_loss.result(), train_accuracy.result()*100)) #, end='\r')
+
+            print("Epoch {}, Batch {}/{}, Train loss {}, Train accuracy {}".format(
+                epoch+1, n_batch, batch_count, train_loss.result(), train_accuracy.result()*100), end='\r')
 
         # saveCheckpointAndImage(ckptManager, generator, seed, epoch)
         print('')
@@ -193,15 +208,14 @@ def trainStep(images, labels, model, optimizer, loss_op, train_loss, train_accur
     train_loss(loss)
     train_accuracy(labels, predictions)
 
-    return loss #, train_loss, train_accuracy
+    return loss
 
-# @tf.function
-# def validatoinStep(images, labels, model, loss_op, validation_loss, validation_accuracy):
-#     predications = model(images)
-#     loss = loss_op(predictions, labels)
-#     validation_loss(loss)
-#     validation_accuracy(labels, predictions)
-#     return validatoin_loss, validation_accuracy
+@tf.function
+def validationStep(images, labels, model, loss_op, validation_loss, validation_accuracy):
+    predictions = model(images)
+    loss = loss_op(predictions, labels)
+    validation_loss(loss)
+    validation_accuracy(labels, predictions)
 
 #%%
 if __name__ == '__main__':
@@ -211,20 +225,13 @@ if __name__ == '__main__':
 
     print("** Fashion Recognizer **")
     X_train, y_train, X_val, y_val, X_test, y_test = loadData('Data/')
+    y_train = makeOneHot(y_train)
+    y_val = makeOneHot(y_val)
+    y_test = makeOneHot(y_test)
 
-    #TODO: Move this to preprocessing
-    X_train = X_train / 255.0
-    X_val = X_val / 255.0
-    X_test = X_test / 255.0
-
-    y_train = tf.one_hot(y_train, 10)
-    y_val = tf.one_hot(y_val, 10)
-    y_test = tf.one_hot(y_test, 10)
-
-    #TODO: Move reshape to a function
-    X_train = X_train.reshape(X_train.shape[0], height, width, channels)
-    X_val = X_val.reshape(X_val.shape[0], height, width, channels)
-    X_test = X_test.reshape(X_test.shape[0], height, width, channels)
+    X_train = reshapeTrainingData(X_train)
+    X_val = reshapeTrainingData(X_val)
+    X_test = reshapeTrainingData(X_test)
 
     drawImage(X_train[10])
 
@@ -238,10 +245,6 @@ if __name__ == '__main__':
     model.summary()
 
     trainNetwork(model, training_dataset, validation_dataset)
-
-    # model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-    # model.fit(x=X_train, y=y_train, epochs=n_epochs, batch_size=batch_Size, validation_data=(X_val, y_val))
-    # model.evaluate(x=X_test, y=y_test)
 
     
 #%%
