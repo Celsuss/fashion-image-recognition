@@ -16,13 +16,13 @@ Each training and test example is assigned to one of the following labels:
 8 Bag
 9 Ankle boot 
 """
-
 #%%
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 import logging
+import shutil
 import math
 import time
 import sys
@@ -32,6 +32,11 @@ print(tf.__version__)
 logging.disable(logging.WARNING)
 os.environ["TF_CPP_MIN_LOG_LEVEL"]="2"
 AUTOTUNE = tf.data.experimental.AUTOTUNE
+
+seed = 1
+np.random.seed(seed)
+tf.random.set_seed(seed) 
+# tf.set_random_seed(seed)
 
 #%%
 DRAW = False
@@ -48,6 +53,9 @@ batch_count = 0
 
 save_iterations = 1
 checkpoint_path = './tmp'
+tensorboard_base_path = './tf_logs'
+tensorboard_traning_path = tensorboard_base_path + '/traning'
+tensorboard_test_path = tensorboard_base_path + '/test'
 
 #%%
 #################
@@ -189,8 +197,8 @@ def createNetwork(n_inputs, n_outputs):
 
 def trainNetwork(model, training_data, validation_data):
     global batch_count
-    optimizer = tf.keras.optimizers.Adam(lr=learning_rate)
 
+    optimizer = tf.keras.optimizers.Adam(lr=learning_rate)
     loss_op = getLossOp()
     train_loss, train_accuracy = getLossAndAccuracyMetrics('train')
     validation_loss, validation_accuracy = getLossAndAccuracyMetrics('validation')
@@ -213,13 +221,23 @@ def trainNetwork(model, training_data, validation_data):
             print("Epoch {}, Batch {}/{}, Train loss {}, Train accuracy {}".format(
                 epoch+1, n_batch, batch_count, train_loss.result(), train_accuracy.result()), end='\r')
 
+            # TODO: Move this to function
+            tf.summary.scalar('training loss', train_loss.result(), step=optimizer.iterations)
+            tf.summary.scalar('training accuracy', train_accuracy.result(), step=optimizer.iterations)
+            train_loss.reset_states()
+            train_accuracy.reset_states()
+
         for validation_image, validation_label in validation_data:
             testStep(validation_image, validation_label, model, loss_op, validation_loss, validation_accuracy)
 
         print('\nValidation loss {}, Validation accuracy {} \nTime for epoch {} is {} sec'.format(validation_loss.result(), validation_accuracy.result(), epoch+1, time.time()-startTime))
-        test = epoch+1 % save_iterations
-        print('test {}'.format(test))
-        if epoch+1 % save_iterations == 0:
+        # TODO: Move this to function
+        tf.summary.scalar('validation loss', validation_loss.result(), step=optimizer.iterations)
+        tf.summary.scalar('validation accuracy', validation_accuracy.result(), step=optimizer.iterations)
+        validation_loss.reset_states()
+        validation_accuracy.reset_states()
+
+        if (epoch+1) % save_iterations == 0:
             saveCheckpoint(ckptManager)
 
     return model
@@ -261,10 +279,35 @@ def testNetwork(model, test_data):
     print('Test loss {}, Test accuracy {}'.format(test_loss.result(), test_accuracy.result()))
 
 #%%
+def deleteCheckpoints():
+    answer = ''
+
+    while answer != 'y' and answer != 'Y' and answer != 'N' and answer != 'n':
+        print('Are you sure you want to remove all checkpoints? (Y/N)')
+        answer = input()
+        
+    if answer == 'Y' or answer == 'y':
+        paths = [checkpoint_path, tensorboard_traning_path, tensorboard_test_path]
+        for path in paths:
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+
+def handleArguments():
+    global DRAW
+    if len(sys.argv) > 1:
+        for arg in sys.argv[1:]:
+            if arg == '-d':
+                DRAW = True
+            elif arg == '-c':
+                deleteCheckpoints()
+                
+
+#%%
 if __name__ == '__main__':
-    if len(sys.argv) == 2:
-        if sys.argv[1] == '-d':
-            DRAW = True
+    # if len(sys.argv) == 2:
+    #     if sys.argv[1] == '-d':
+    #         DRAW = True
+    handleArguments()
 
     print("** Fashion Recognizer **")
     X_train, y_train, X_val, y_val, X_test, y_test = loadData('Data/')
@@ -284,8 +327,14 @@ if __name__ == '__main__':
     model = createNetwork(input_shape, n_output)
     model.summary()
 
-    model = trainNetwork(model, training_dataset, validation_dataset)
-    testNetwork(model, test_dataset)
+    # Create summary logging
+    train_summary_writer = tf.summary.create_file_writer(tensorboard_traning_path)
+    test_summary_writer = tf.summary.create_file_writer(tensorboard_test_path)
+
+    with train_summary_writer.as_default():
+        model = trainNetwork(model, training_dataset, validation_dataset)
+    with test_summary_writer.as_default():
+        testNetwork(model, test_dataset)
 
     
 #%%
